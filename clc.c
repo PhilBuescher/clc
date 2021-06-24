@@ -90,6 +90,20 @@ static void editbuf_display();
 static void editbuf_home();
 static void editbuf_end();
 
+/* history buffer */
+	/* HISTBUF_MAX will set the number of remembered lines in command history. */
+#define HISTBUF_MAX 20
+	/* static declarations and initial values for history buffer stuff */
+#define HISTBUF_UP -1
+#define HISTBUF_DOWN 1
+static char histbuf[HISTBUF_MAX][EDITBUF_MAX];
+static int histbuf_line = 0;
+static int histbuf_last = 0;
+static void histbuf_pos(int);
+
+/* //Debug to show LASTKEY pressed on the banner */
+//static int lastkey;
+
 /* running flag; when 0, exit main loop */
 static int running = 1;
 
@@ -235,11 +249,57 @@ static void editbuf_display () {
 	wmove(win_input, 0, editbuf.pos);
 }
 
+/* set the history buffer to contain the given text at current line of global histbuf_line */
+static void histbuf_set (const char* text, size_t len) {
+	if (len < 1 )
+		return;
+        snprintf(histbuf[histbuf_line], len+1, "%s", text);
+}
+
+/* set edit buffer to the incremented or decremented history buffer pos */
+static void histbuf_pos (int dir) {
+	int new_hbline=0;
+
+	/* dir is either 1 or -1. This gives us what might be the new history buffer line number in the local new_hbline int */
+	new_hbline=histbuf_line+dir;
+
+	/* handle rollover */
+	if (new_hbline < 0)
+		new_hbline=HISTBUF_MAX-1;
+	else if (new_hbline == HISTBUF_MAX)
+		new_hbline=0;
+
+	/* already on the current working line, nothing newer there */
+	if (dir == HISTBUF_DOWN)
+		if (histbuf_line==histbuf_last) {
+			return;
+		}
+
+	/* already on the oldest line, nothing older there */
+	if (dir == HISTBUF_UP)
+		if (new_hbline==histbuf_last)
+			//histbuf_set(editbuf.buf, editbuf.size);
+			return;
+
+	/* if the direction is a null string, don't do anything */
+	if (strlen( histbuf[new_hbline] ) == 0 )
+		if (dir != HISTBUF_DOWN)
+			return;
+
+	histbuf_set(editbuf.buf, editbuf.size);
+	histbuf_line=new_hbline;
+	editbuf_set(histbuf[histbuf_line]);
+}
+
 /* paint banner */
 static void paint_banner (void) {
 	/* if autobanner is on, build our banner buffer */
 	if (autobanner) {
-		snprintf(banner, sizeof(banner), "%s:%s - (%s)", host, port, sock == -1 ? "disconnected" : "connected");
+		/* //Debug to show LASTKEY pressed on the banner */
+//		if (lastkey)
+//			snprintf(banner, sizeof(banner), "Key = %4d : %s:%s - (%s)", lastkey, host, port, sock == -1 ? "disconnected" : "connected");
+//		else
+			snprintf(banner, sizeof(banner), "%s:%s - (%s)", host, port, sock == -1 ? "disconnected" : "connected");
 	}
 
 	/* paint */
@@ -307,14 +367,17 @@ static void do_send (const char* bytes, size_t len) {
 
 /* process user input */
 static void on_key (int key) {
+	/* //Debug to show LASTKEY pressed on the banner - search for LASTKEY to find others */
+//	lastkey=key;
+
 	/* special keys */
-	if (key >= KEY_MIN && key <= KEY_MAX) {
+	/* Adding 527 and 568 as per below in the arrow key navigation section */
+	if ( (key >= KEY_MIN && key <= KEY_MAX)
+	|| (key==527 || key==568) ) {
 		/* send */
 		if (key == KEY_ENTER) {
 			/* send line to server */
 			send_line(editbuf.buf, editbuf.size);
-			/* reset input */
-			editbuf_set("");
 		}
 
 		/* backspace/delete */
@@ -339,14 +402,54 @@ static void on_key (int key) {
 			editbuf_end();
 		}
 
+		/* history buffer navigation */
+		else if (key == KEY_UP) {
+			histbuf_pos(HISTBUF_UP);
+		}
+		else if (key == KEY_DOWN) {
+			histbuf_pos(HISTBUF_DOWN);
+		}
+
+		/* (Ctrl+)SHIFT+arrow navigation for south/north/west/east/down/up
+ 		 * Locales may have problems, enable the commented out autobanner bit that displays Key: lastkey for the codes, search for LASTKEY comments
+ 		 * Note that you need to add anything above KEY_MAX to the if statement above this block - aka ctrl+shift+keys */
+		else if (key == 336) {
+			/* Shift+KEY_DOWN */
+			editbuf_set("south");
+			send_line(editbuf.buf, editbuf.size);
+		}
+		else if (key == 337) {
+			/* Shift+KEY_UP */
+			editbuf_set("north");
+			send_line(editbuf.buf, editbuf.size);
+		}
+		else if (key == 393) {
+			/* Shift+KEY_LEFT */
+			editbuf_set("west");
+			send_line(editbuf.buf, editbuf.size);
+		}
+		else if (key == 402) {
+			/* Shift+KEY_RIGHT */
+			editbuf_set("east");
+			send_line(editbuf.buf, editbuf.size);
+		}
+		else if (key == 527) {
+			/* Ctrl+Shift+KEY_DOWN */
+			editbuf_set("down");
+			send_line(editbuf.buf, editbuf.size);
+		}
+		else if (key == 568) {
+			/* Ctrl+Shift+KEY_UP */
+			editbuf_set("up");
+			send_line(editbuf.buf, editbuf.size);
+		}
+
 	/* regular text */
 	} else {
 		/* send */
 		if (key == '\n' || key == '\r') {
 			/* send line to server */
 			send_line(editbuf.buf, editbuf.size);
-			/* reset input */
-			editbuf_set("");
 
 		/* add key to edit buffer */
 		} else {
@@ -731,7 +834,7 @@ static void telnet_event (telnet_t* telnet, telnet_event_t* ev, void* ud) {
 		break;
 	}
 }
-	
+
 /* send a line to the server */
 static void send_line (const char* line, size_t len) {
 	telnet_printf(telnet, "%.*s\n", (int)len, line);
@@ -743,6 +846,19 @@ static void send_line (const char* line, size_t len) {
 		on_text_plain("\n", 1);
 		wattron(win_main, COLOR_PAIR(terminal.color));
 	}
+	/* set the line to the history buffer using the newest line in the rotation */
+	if( len > 0 )
+	{
+		histbuf_line=histbuf_last;
+		histbuf_set(line, len);
+		histbuf_line++;
+		if (histbuf_line == HISTBUF_MAX)
+			histbuf_line=0;
+		histbuf_last=histbuf_line;
+	}
+	/* reset input */
+	histbuf_set("",1);
+	editbuf_set("");
 }
 
 /* send NAWS update */
